@@ -1,0 +1,509 @@
+{
+ "schema": "readystack.recipe.v1",
+ "slug": "posthog",
+ "tag": "master-20261022-b904ac8-CE-ubuntu24.04-r5",
+ "tarball": "ReadyStack-posthog-master-20261022-b904ac8-CE-ubuntu24.04-r5.tar.gz",
+ "tarball_sha256": "9f66f4f799525ef5be98aac73de1d419b2e8f3882e277c25c2e66c58df681c79",
+ "kit_root": "master-20261022-b904ac8-CE-ubuntu24.04-r5",
+ "generated_at": "2026-11-12T10:56:35Z",
+ "generator": "KitForge release/recipe_publish.py",
+ "dockerfile": "Dockerfile.offline.pinned",
+ "build_script": "BUILD_OFFLINE.sh",
+ "preview_lines": 24,
+ "pins": {
+  "upstream": {
+   "repo": "https://github.com/PostHog/posthog",
+   "ref": "b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+   "commit": "b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+   "url": "https://github.com/PostHog/posthog/tree/b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+   "from": "docs/provenance/BUILD_RECIPE.json"
+  },
+  "fetches": [
+   {
+    "kind": "http",
+    "url": "https://github.com/PostHog/posthog.git"
+   },
+   {
+    "kind": "http",
+    "url": "https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz"
+   }
+  ],
+  "bases": [
+   {
+    "ref": "ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852",
+    "image": "ubuntu:24.04",
+    "digest": "sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852"
+   }
+  ],
+  "toolchain": {
+   "buildkit": "moby/buildkit:v0.31.2",
+   "buildkit_image_digest": "sha256:e0e67ea9c4bb07bdef683e29f70f3b623d1eb9c82274a9ec04e6bb0511449fb0"
+  },
+  "build_method": "source-rebuild-python",
+  "source_date_epoch": 1794384272,
+  "source_date_epoch_utc": "2026-11-11T08:04:32Z",
+  "target": {
+   "image_manifest_digest": "sha256:5727cfa920c09ee1676454dc7b0bac8e240fe76804f4780565f1bd146e2f7526",
+   "config_digest": "sha256:9f6aa7d7d491207646832649e86c8eb5a60ad9ccdf623836dad7ea99efda1fe7",
+   "image": "readystack/posthog:master-20261022-b904ac8-CE-ubuntu24.04-r5"
+  },
+  "checksummed_files": 60087
+ },
+ "files": [
+  {
+   "path": "BASES.tsv",
+   "size": 121,
+   "sha256": "63822800fc2b89e7b38d1fbaaad6f0c80c9a91a0176ebe7d935c08b0cdd6b4fa",
+   "lines": 1,
+   "public": "full"
+  },
+  {
+   "path": "BUILD_OFFLINE.sh",
+   "size": 8856,
+   "sha256": "6ab4f08a6ec775b32d854f03413b30ecfe555ddba78cf0de956235f5a2a39542",
+   "lines": 162,
+   "public": "preview",
+   "preview_lines": 24
+  },
+  {
+   "path": "CHECKSUMS.sha256",
+   "size": 9975713,
+   "sha256": "f50f6ab01ab719d7c5ec9430272ff7d80181760693415912e7d6474a24574118",
+   "lines": 60087,
+   "public": "account",
+   "stored": "gzip"
+  },
+  {
+   "path": "Caddyfile",
+   "size": 1458,
+   "sha256": "41d434aaf8d77668a777ce710549c29c6e3f6d844a8d8dbb17de206e621bab49",
+   "lines": 38,
+   "public": "account"
+  },
+  {
+   "path": "DOCKERFILE_NAME.txt",
+   "size": 26,
+   "sha256": "9aadd1ede68e016a6f163c97befc5ff2fcdc8ebd4f84b108dba63cb195fa8c84",
+   "lines": 1,
+   "public": "full"
+  },
+  {
+   "path": "Dockerfile",
+   "size": 8775,
+   "sha256": "6169bd430f3def4ec2a223b4da47641f064ca5cfe30b8c82b8b72ff78bc7ffbb",
+   "lines": 70,
+   "public": "account"
+  },
+  {
+   "path": "Dockerfile.offline",
+   "size": 8775,
+   "sha256": "6169bd430f3def4ec2a223b4da47641f064ca5cfe30b8c82b8b72ff78bc7ffbb",
+   "lines": 70,
+   "public": "account"
+  },
+  {
+   "path": "Dockerfile.offline.pinned",
+   "size": 8775,
+   "sha256": "6169bd430f3def4ec2a223b4da47641f064ca5cfe30b8c82b8b72ff78bc7ffbb",
+   "lines": 70,
+   "public": "preview",
+   "preview_lines": 24
+  },
+  {
+   "path": "Dockerfile.vendor",
+   "size": 32770,
+   "sha256": "ac2fd8b50495b354775ee28518aaa513a92f73c6193b260912da13a218b4bad5",
+   "lines": 381,
+   "redactions": [
+    {
+     "line": 262,
+     "kind": "internal host"
+    }
+   ],
+   "kit_sha256": "f29ceccbf85935c5cf7248b75688385d503a4ad7e0696ea6fcaac2416c037461",
+   "kit_size": 32750,
+   "public": "account"
+  },
+  {
+   "path": "FILE_MODES.tsv",
+   "size": 6878925,
+   "sha256": "100de7ed32a02bc9b3a5d5d51aca5f9ca26486319d07a68d52e6758f1c46b024",
+   "lines": 68722,
+   "public": "account",
+   "stored": "gzip"
+  },
+  {
+   "path": "MANIFEST.txt",
+   "size": 5889827,
+   "sha256": "890bc2d543134e2252329152441938c52153b63309d5543bdb9568864a233e6f",
+   "lines": 60089,
+   "public": "account",
+   "stored": "gzip"
+  },
+  {
+   "path": "README.md",
+   "size": 3426,
+   "sha256": "174d243a73fede9b9e9409298148aca084544b56a762807a12b92dc997502db8",
+   "lines": 39,
+   "public": "account"
+  },
+  {
+   "path": "SOURCE_DATE_EPOCH.txt",
+   "size": 11,
+   "sha256": "6d4e773a3ee4e92e09e0b12125f8fe30f047826e0ebed2fccb416eb7614345d3",
+   "lines": 1,
+   "public": "full"
+  },
+  {
+   "path": "TARGET_DIGEST.txt",
+   "size": 473,
+   "sha256": "ecde3be36a1a83e47a116bc06c519b9a02db1dd36f20009742a9430f64859bf7",
+   "lines": 8,
+   "public": "full"
+  },
+  {
+   "path": "VERIFY_OFFLINE.sh",
+   "size": 10153,
+   "sha256": "3e8184ea230cfd8f41f977e26be6bf7bd03112c396c517837ce0c7de4f7399dd",
+   "lines": 165,
+   "public": "account"
+  },
+  {
+   "path": "caddy-main.go",
+   "size": 392,
+   "sha256": "4da984dde7600668063aee6c3bf9abfd1de9e0e4f75dcd2861f81a0557431823",
+   "lines": 13,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat-patch.sh",
+   "size": 1261,
+   "sha256": "23fc92ad5ff840333c0b7c2e3e377f72219275a5e7cbf43149f1806e71189f3f",
+   "lines": 21,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/__init__.py",
+   "size": 4995,
+   "sha256": "3eb9fbea303144738c1a147ba89718d6caebc7390546f2f8ddc61dad05e68591",
+   "lines": 147,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/apps.py",
+   "size": 105,
+   "sha256": "dd4dc999d457fa08883ba12141b65e5b80b8077ef71dfc89530ad054e17d1c61",
+   "lines": 1,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/ce.py",
+   "size": 340,
+   "sha256": "d2a487f8cb08339e6529fe23983d184c0b5fb468ac4401d9102812fc2a05a010",
+   "lines": 9,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0001_squash_2026_09_07_initial.py",
+   "size": 5757,
+   "sha256": "1e51c75c753e68a91c3b58c9b181fc91bb52a4e16afbb189ebdcf57327cd4a7a",
+   "lines": 89,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0014_roles_memberships_and_resource_access.py",
+   "size": 389,
+   "sha256": "fbdc5e7b75219d1e2a47f0f94ddff302bce3de805c95317fa8e9a5290fd1d6e0",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0026_conversation_created_at_conversation_title_and_more.py",
+   "size": 401,
+   "sha256": "7c9ed416c5dc3cdd102ee0e9affe391d15d55651c72957ce21e7cbbd2d7e1d20",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0028_alter_conversation_type.py",
+   "size": 415,
+   "sha256": "1835580758d4155f94e6b3056e17fc2e917fadbb95e7c61d0a137b08b3dd5f61",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0037_add_conversation_approval_decisions.py",
+   "size": 387,
+   "sha256": "d61691e69d0ad42b8dca1ca1c9ac2ed40b112e4954925c0b80ee8fd733274be6",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0041_migrate_dashboards_models.py",
+   "size": 399,
+   "sha256": "3c02657dc5ff91f5c4b94795afcaacb0f0d4fb6996901b24834554809533fcda",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0046_migrate_cdp_models.py",
+   "size": 389,
+   "sha256": "a4b09dade5718c0e18fa527b6a1cfe969fad0792e0b745d2ec1157565e6ac5d7",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0047_migrate_ai_observability_models.py",
+   "size": 382,
+   "sha256": "42240ebf954dcae2466a3601b03b31ad56d4c75a4b48faebd1fb228fb26d044b",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0049_migrate_posthog_ai_models.py",
+   "size": 395,
+   "sha256": "9d16a46accfb91ced01f51d7a8d6fe5b481e7c893ba07efabb7bd9b193f83627",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0050_migrate_replay_models.py",
+   "size": 389,
+   "sha256": "9a50c67ae06b79d63e3dacf472dbcff3cffd28dcc8606fd0339529a1a07a83c2",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0059_scimprovisioneduser_unique_config.py",
+   "size": 385,
+   "sha256": "7f0999cf8ea0ab250fd8b29a9dd83535f67572dd519d4556cbc2a90d81b18b30",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0061_squash_2026_09_07_finalize_fks.py",
+   "size": 1435,
+   "sha256": "71ae00b79af4aedf1247bae2139ae8bb660dd5cf63e131452ee73f3d635c1f65",
+   "lines": 30,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0063_scim_provisioned_user_config_set_null.py",
+   "size": 394,
+   "sha256": "cfb91bea0b2a94ad446d5eb4cec3709410c820df28316dcb6cb0ee648540e72c",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/0064_split_identity_provider_config_scopes.py",
+   "size": 401,
+   "sha256": "c2c2d8773af298187cd1b9fecf73c655e6da31731b41fb89c6507e6703ebc9d9",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/migrations/__init__.py",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "lines": 0,
+   "public": "account"
+  },
+  {
+   "path": "ce-compat/settings.py",
+   "size": 3434,
+   "sha256": "b755d70ca855896ee980ce378ebc5b4e977f4d66ee72a27396dd6ec4536c1f24",
+   "lines": 67,
+   "public": "account"
+  },
+  {
+   "path": "clickhouse-init.sh",
+   "size": 273,
+   "sha256": "52972f610b36031f7c637a3116109ebcbe8af1af2404a5851dceca4d1217d072",
+   "lines": 5,
+   "public": "account"
+  },
+  {
+   "path": "clickhouse-keeper.xml",
+   "size": 598,
+   "sha256": "f24873c05829d74476b20d69154eb0cc38e2ef307210aec1921b24a0d817d5e4",
+   "lines": 11,
+   "public": "account"
+  },
+  {
+   "path": "clickhouse-start.sh",
+   "size": 887,
+   "sha256": "3896bcc52dfa1b261250f6be48ea0fabe35d6d6c227d2cb6f165d14f4456cc4d",
+   "lines": 14,
+   "public": "account"
+  },
+  {
+   "path": "cpu_baseline.py",
+   "size": 3245,
+   "sha256": "117517249bf66ef092f5c0b870a02a7a771a9f3b15131c5ed844e7b97c663068",
+   "lines": 49,
+   "redactions": [
+    {
+     "line": 8,
+     "kind": "internal host"
+    }
+   ],
+   "kit_sha256": "9de8f4a7f26e503bc3811cd1836aa4cf32f616bfd88c3e6b64fb6a0ff755f054",
+   "kit_size": 3225,
+   "public": "account"
+  },
+  {
+   "path": "docs/PROVENANCE.md",
+   "size": 2764,
+   "sha256": "1c46d8e2c547c71eea9c5031f02fead2b95d80d68a844915e4136c3713b99b1f",
+   "lines": 36,
+   "public": "account"
+  },
+  {
+   "path": "docs/REBUILD.md",
+   "size": 6352,
+   "sha256": "f9863d6f4155b1582303a63d51417779ad333e350b629fa01b1ac8c0aa45820d",
+   "lines": 62,
+   "public": "account"
+  },
+  {
+   "path": "docs/VERIFY.md",
+   "size": 2113,
+   "sha256": "11f7f13abc874e33b15cad1f6c671de60e2cbc7be70fbff9b24aadbd1cf3f1d8",
+   "lines": 34,
+   "public": "account"
+  },
+  {
+   "path": "docs/provenance/BASE_IMAGE_DIGESTS.lock",
+   "size": 50,
+   "sha256": "be066fe4d52a54075f148fc84a10a8d6599d70ba0cbfb6229b32894512078827",
+   "lines": 2,
+   "public": "full"
+  },
+  {
+   "path": "docs/provenance/BUILD_RECIPE.json",
+   "size": 2589,
+   "sha256": "7cc3f4f2afca8cbca203eb6f177c5b4ddcaa9df4fb46672a17806f08450b2b3c",
+   "lines": 54,
+   "public": "account"
+  },
+  {
+   "path": "docs/provenance/CUSTODY_INPUTS.json",
+   "size": 697,
+   "sha256": "b33e6f5a21e3675bb85896b688991856da353b9fb818d8eeeeb24670926e50b0",
+   "lines": 19,
+   "public": "account"
+  },
+  {
+   "path": "docs/provenance/SOURCE_FILE_MANIFEST.json",
+   "size": 277640,
+   "sha256": "ec3c98b73a1de3fb2c499c648c44de2ccf3babe3c8638adb258de70db16f7c09",
+   "lines": 5007,
+   "public": "account",
+   "stored": "gzip"
+  },
+  {
+   "path": "docs/provenance/SOURCE_TREE_HASH.json",
+   "size": 340,
+   "sha256": "823655809b5f6eb832c5eef62a69f50b85ef8f9824a33df5b21dd6105c72f390",
+   "lines": 9,
+   "public": "full"
+  },
+  {
+   "path": "docs/provenance/SYSTEM_PINNING.lock",
+   "size": 276,
+   "sha256": "559dab46219903d02d5f4994a860f22e2aa19c9de9593f3da9abe134d10de86d",
+   "lines": 26,
+   "public": "account"
+  },
+  {
+   "path": "docs/provenance/TOOLCHAIN.lock",
+   "size": 3526,
+   "sha256": "640cf6fa1f1c9248e99fc77d6d54e8d264fb27afd5831d1f56fe45c67382a017",
+   "lines": 80,
+   "public": "account"
+  },
+  {
+   "path": "empty_mmdb.py",
+   "size": 2866,
+   "sha256": "a287fb3679b6b87329772a877d7aa8a8430606dbcde0b9450409eaa5f061ff4d",
+   "lines": 70,
+   "public": "account"
+  },
+  {
+   "path": "npm-floors.json",
+   "size": 5951,
+   "sha256": "f549920a70175087164e320ebfdc1f933b8bbac11abcbe472b69a3a2b8d5337d",
+   "lines": 74,
+   "public": "account"
+  },
+  {
+   "path": "npm_floors_check.py",
+   "size": 4545,
+   "sha256": "bae8c7ff50fed9161cf3e8e9f6bb5d1769b3c79e0e5e3148340ea01b1dbba925",
+   "lines": 110,
+   "public": "account"
+  },
+  {
+   "path": "posthog-ce",
+   "size": 9382,
+   "sha256": "34b50c45fec3fe18cc8acd1b1b345596b3dc4d94e553d5a33198e476883ed875",
+   "lines": 142,
+   "public": "account"
+  },
+  {
+   "path": "py-floors.txt",
+   "size": 962,
+   "sha256": "5995b3f2bccc51c8c99ad9b627ae389c1eab78071117e8f2a17da12be324ac5d",
+   "lines": 46,
+   "public": "account"
+  },
+  {
+   "path": "readystack_setup.py",
+   "size": 2987,
+   "sha256": "4149a09ef567ad158eaad2675da406b7a96d6b0e304566b23c8971104c725997",
+   "lines": 58,
+   "public": "account"
+  },
+  {
+   "path": "rebuild.json",
+   "size": 1256,
+   "sha256": "f28432d9adc6736405c438065b36a61b83a0d2d7b81c6040cc216135fc750632",
+   "lines": 31,
+   "public": "account"
+  },
+  {
+   "path": "resolve_floors.py",
+   "size": 2416,
+   "sha256": "8412a7f8e1d4c4ba571da1d01eab141da5ab3cce46c5b2dc0607890d9a0891c7",
+   "lines": 42,
+   "public": "account"
+  },
+  {
+   "path": "toolchain/BUILDKIT_TAG.txt",
+   "size": 22,
+   "sha256": "fcd530eeb02b063d2f047adad6eef896422a8e8d558513e5f09b2a262be32573",
+   "lines": 1,
+   "public": "full"
+  }
+ ],
+ "skipped": [],
+ "kit_adds": {
+  "bases": {
+   "files": 5,
+   "bytes": 29771169
+  },
+  "docs": {
+   "files": 59943,
+   "bytes": 799629592
+  },
+  "toolchain": {
+   "files": 1,
+   "bytes": 111529472
+  },
+  "vendored": {
+   "files": 81,
+   "bytes": 2751112958
+  }
+ },
+ "redacted_files": 2
+}

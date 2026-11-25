@@ -1,0 +1,8 @@
+image_manifest_digest=sha256:5727cfa920c09ee1676454dc7b0bac8e240fe76804f4780565f1bd146e2f7526
+config_digest=sha256:9f6aa7d7d491207646832649e86c8eb5a60ad9ccdf623836dad7ea99efda1fe7
+tag=readystack/posthog:master-20261022-b904ac8-CE-ubuntu24.04-r5
+probe_port=8000
+probe_path=/_health
+probe_timeout=5400
+verify_boot=skip
+verify_boot_reason=this image needs db, redis, kafka, clickhouse (not part of this archive); boot it with your own services as the admin handbook describes

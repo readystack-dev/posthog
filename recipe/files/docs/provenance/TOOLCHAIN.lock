@@ -1,0 +1,80 @@
+{
+  "apt_refresh": [
+    {
+      "min_version": "2.8.4ubuntu0.1",
+      "package": "apt",
+      "reason": "CVE-2026-109518 (high): apt 2.8.3 -> 2.8.4ubuntu0.1 (fix published 2026-11-04), found by ReadyStack's daily scan of the live master-20261022-b904ac8-CE-ubuntu24.04-r3 (2026-11-07, scripts/scan-inventory.py: syft 1.54.1 + grype 0.120.1). Mirrored in product-kits/posthog/build/ (hand kits do not read apt_refresh): Dockerfile.vendor's runtime stage fails unless its dist-upgrade installed it, and the offline Dockerfiles fail unless the reassembled system has it."
+    },
+    {
+      "min_version": "2.8.4ubuntu0.1",
+      "package": "libapt-pkg6.0t64",
+      "reason": "CVE-2026-109518 (high): libapt-pkg6.0t64 2.8.3 -> 2.8.4ubuntu0.1 (the library of the same apt source package), found with apt by the same scan. Mirrored in product-kits/posthog/build/ (hand kits do not read apt_refresh): Dockerfile.vendor's runtime stage fails unless its dist-upgrade installed it, and the offline Dockerfiles fail unless the reassembled system has it."
+    },
+    {
+      "min_version": "10.42-4ubuntu2.2",
+      "package": "libpcre2-8-0",
+      "reason": "CVE-2026-86145, CVE-2026-89156, CVE-2026-89157, CVE-2026-89158, CVE-2026-89160, CVE-2026-89161, CVE-2026-103111 (medium): libpcre2-8-0 10.42-4ubuntu2.1 (r3's SBOM) -> 10.42-4ubuntu2.2; the dist-upgrade takes it with apt, the floor the fleet's other Ubuntu kits carry (strategies/kubeapiserver.json apt_refresh). Mirrored in product-kits/posthog/build/ (hand kits do not read apt_refresh): Dockerfile.vendor's runtime stage fails unless its dist-upgrade installed it, and the offline Dockerfiles fail unless the reassembled system has it."
+    }
+  ],
+  "build_method": "source-rebuild-python",
+  "chain_id": 967,
+  "dep_bumps": [],
+  "expected_residuals": [],
+  "images": [
+    {
+      "digest": "sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852",
+      "ref": "ubuntu:24.04",
+      "role": "base"
+    }
+  ],
+  "mod_replaces": [],
+  "runtime_packages": [
+    "ca-certificates",
+    "netbase",
+    "tzdata",
+    "libssl3t64",
+    "zlib1g",
+    "libbz2-1.0",
+    "libsqlite3-0",
+    "libffi8",
+    "liblzma5",
+    "libzstd1",
+    "libuuid1",
+    "libexpat1",
+    "libncursesw6",
+    "libtinfo6",
+    "libreadline8t64",
+    "libpq5",
+    "libxmlsec1t64",
+    "libxmlsec1t64-openssl",
+    "libxml2",
+    "libxslt1.1",
+    "libjemalloc2",
+    "libgomp1",
+    "media-types",
+    "procps",
+    "libsasl2-2",
+    "curl"
+  ],
+  "schema": "kitforge.toolchain_lock.v1",
+  "slug": "posthog",
+  "source": {
+    "commit": "b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+    "commit_epoch": 1792630321,
+    "ee_strip": [
+      "ee"
+    ],
+    "python_runtime": {
+      "provider": "ubuntu-source",
+      "sha256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+      "version": "3.14.10"
+    },
+    "python_version": "3.14",
+    "ref": "b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+    "repo": "https://github.com/PostHog/posthog",
+    "source_date_epoch": 1794384272,
+    "source_date_epoch_basis": "release-cut",
+    "source_date_epoch_provenance": "the time release master-20261022-b904ac8-CE-ubuntu24.04-r5 was cut (2026-11-11T08:04:32Z), by scripts/rerelease-agenda.py: ReadyStack dates an image by when its release was packaged (owner 2026-11-10), recorded here once and used by every rebuild of the release; it builds upstream commit b904ac8008e5, dated 2026-10-22T00:52:01Z (source.commit_epoch)."
+  },
+  "version": "master-20261022-b904ac8"
+}

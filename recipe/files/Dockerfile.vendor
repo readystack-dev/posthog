@@ -1,0 +1,381 @@
+# syntax=docker/dockerfile:1
+# =====================================================================
+# PostHog (MIT; the Enterprise ee/ directory is REMOVED) -- VENDOR build (online).
+# Upstream's last tagged server release is 1.43.1 (2023-05-17); this builds the default-branch commit pinned below
+# (owner 2026-10-22, docs/RELEASE_POLICY.md section 4). Every PostHog process is built from that commit's
+# source on Ubuntu 24.04 and exported as filesystem tars that Dockerfile.offline.pinned reassembles with
+# the network off:
+#   - Django web app + Celery worker: CPython compiled from python.org's source against Ubuntu's libraries
+#     (gen_dockerfile.cpython_build_cmd), Python dependencies from upstream's uv.lock with CVE floors
+#   - frontend: built static assets only (no node_modules, no build toolchain in the image)
+#   - Node ingestion server (nodejs/): production dependencies only (pnpm deploy --prod)
+#   - Rust services: capture, personhog-replica, personhog-router, feature-flags, property-defs-rs
+# PostHog's MIT code no longer runs without ee/ (it imports ee.* and declares models under the Django app
+# label "ee"): ce-compat/ is ReadyStack's MIT replacement package (no PostHog Enterprise code), see its
+# __init__.py. GeoIP: an empty MaxMind-format database (empty_mmdb.py) instead of MaxMind's GeoLite2
+# (EULA-licensed, not open).
+# =====================================================================
+ARG PH_COMMIT=b904ac8008e531c8aaeaf58e523cf97cff9fba41
+ARG PH_VERSION=master-20261022-b904ac8
+ARG PH_EXCLUDE_NEWER=2026-10-22T00:52:01Z
+# Packages resolved past the commit date, each to a fixed cutoff: a CVE fix published after it (brotli 1.2.1,
+# 2026-10-22T13:57Z, CVE-2026-111497; pyasn1 0.6.5 and pypdf 6.21.4, chain 804's verdict 2026-11-01; oauthlib 4.0.1,
+# 2026-10-31T09:52Z, GHSA-3jp2-3mrg-2vxc, r3's daily scan 2026-11-07). Space-separated
+# PACKAGE=DATE, uv's --exclude-newer-package; release/cve_floor.py writes an entry with each PyPI floor that needs one.
+# Quoted: an ARG line takes several name=value pairs, so unquoted only the first entry would be this ARG's value.
+ARG PH_EXCLUDE_NEWER_PACKAGES="brotli=2026-10-23T00:00:00Z pypdf=2026-10-29T00:00:00Z pyasn1=2026-10-28T00:00:00Z oauthlib=2026-11-01T00:00:00Z"
+ARG NODE_VERSION=24.22.1
+ARG NODE_SHA256=eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c
+
+# ---- source: the pinned commit, ee/ removed BEFORE anything reads the tree, the CE package added ----
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS src
+ARG PH_COMMIT
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+RUN git init -q /src && cd /src && git remote add origin https://github.com/PostHog/posthog.git \
+ && git fetch -q --depth 1 origin "$PH_COMMIT" && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "$PH_COMMIT" && rm -rf .git ee
+COPY ce-compat /src/ee
+COPY ce-compat-patch.sh /tmp/ce-compat-patch.sh
+RUN cd /src && CE_ROOT=/src bash /tmp/ce-compat-patch.sh
+
+# ---- node toolchain (nodejs.org's release, sha256-checked) on the runtime's Ubuntu ----
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS node-dist
+ARG NODE_VERSION
+ARG NODE_SHA256
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL --retry 3 -o /tmp/node.tgz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+ && echo "${NODE_SHA256}  /tmp/node.tgz" | sha256sum -c - \
+ && mkdir -p /opt/node && tar -xzf /tmp/node.tgz -C /opt/node --strip-components=1 --no-same-owner && rm /tmp/node.tgz \
+ && /opt/node/bin/node --version
+
+# ---- rust services (and the toolchain the node addons compile with) ----
+FROM rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS rust
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev pkg-config cmake libclang-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+COPY --from=src /src/rust /code/rust
+COPY --from=src /src/proto /code/proto
+COPY --from=src /src/funnel-udf /code/funnel-udf
+WORKDIR /code/rust
+ENV CARGO_NET_RETRY=5
+RUN cargo build --release --locked --bin capture --bin personhog-replica --bin personhog-router --bin feature-flags --bin property-defs-rs \
+ && mkdir -p /out/bin && for b in capture personhog-replica personhog-router feature-flags property-defs-rs; do \
+      strip --strip-unneeded -o "/out/bin/$b" "target/release/$b"; done && ls -la /out/bin
+# ClickHouse UDF: funnel aggregation (aggregate_funnel), from upstream's funnel-udf crate
+RUN cd /code/funnel-udf && cargo build --release --locked && mkdir -p /out/udf \
+ && strip --strip-unneeded -o /out/udf/aggregate_funnel_x86_64 target/release/funnels
+
+# ---- ClickHouse UDFs written in Go (clickhouse-udfs/util), built as upstream's scripts/build.sh does ----
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS udf-go
+COPY --from=src /src/clickhouse-udfs/util /src/udfs
+WORKDIR /src/udfs
+ENV GOTOOLCHAIN=local CGO_ENABLED=0
+# CVE floors, raise-only and fail-closed like the Caddy stage's (L-A133): upstream's go.mod requires
+# github.com/klauspost/compress v1.19.1, which master-20261022-b904ac8-CE-ubuntu24.04-r3 shipped in decompress_udf
+# (GO-2026-6865 / CVE-2026-116591, high, fixed in 1.20.2). held() re-checks the floor after `go mod tidy`.
+RUN floor() { e=$(mktemp); cur=$(go list -mod=mod -m -f '{{.Version}}' "$1" 2>"$e") || \
+        { grep -q 'not a known dependency' "$e" && return 0; cat "$e" >&2; return 1; }; [ -n "$cur" ] || return 0; \
+      [ "$(printf '%s\n%s\n' "$cur" "$2" | sort -V | tail -1)" = "$cur" ] || go mod edit -require="$1@$2"; } && \
+    held() { e=$(mktemp); cur=$(go list -m -f '{{.Version}}' "$1" 2>"$e") || \
+        { grep -q 'not a known dependency' "$e" && return 0; cat "$e" >&2; return 1; }; \
+      [ "$(printf '%s\n%s\n' "$cur" "$2" | sort -V | tail -1)" = "$cur" ] || \
+        { echo "floor $1 $2 did not take: the module resolved to $cur" >&2; return 1; }; } && \
+    floor github.com/klauspost/compress v1.20.2 && go mod tidy && held github.com/klauspost/compress v1.20.2 && \
+    mkdir -p /out/udf && for u in decompress_udf json_drop_keys_udf json_clean_posthog_event_properties_udf json_strip_empty_strings_and_nulls_udf; do \
+      go build -buildvcs=false -trimpath -ldflags "-s -w" -o "/out/udf/${u}_x86_64" "./cmd/$u"; done && ls -la /out/udf
+
+# ---- frontend: static assets ----
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS frontend
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 build-essential && rm -rf /var/lib/apt/lists/*
+COPY --from=node-dist /opt/node /opt/node
+ENV PATH=/opt/node/bin:$PATH
+WORKDIR /code
+COPY --from=src /src/ /code/
+RUN corepack enable && corepack install
+ENV COREPACK_ENABLE_NETWORK=0
+RUN CI=1 pnpm --filter=@posthog/frontend... install --frozen-lockfile --store-dir /tmp/pnpm-store
+RUN NODE_OPTIONS="--max-old-space-size=12288" bin/turbo --filter=@posthog/frontend build \
+ && du -sh frontend/dist
+
+# ---- node ingestion server + the plugin transpiler Django calls ----
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS nodejs
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 build-essential pkg-config \
+      libssl-dev zlib1g-dev libsasl2-dev libzstd-dev cmake libclang-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+COPY --from=node-dist /opt/node /opt/node
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV PATH=/opt/node/bin:/usr/local/cargo/bin:$PATH CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup
+WORKDIR /code
+COPY --from=src /src/ /code/
+# CVE floors for the production dependencies (npm-floors.json: each package with a fixable critical/high advisory
+# raised to the lowest fixed version, in its own major line where one exists), merged into upstream's pnpm overrides.
+# npm_floors_check.py fails the deploy step below when a floor did not take (an upstream override that still wins).
+COPY npm-floors.json npm_floors_check.py /readystack/
+RUN corepack enable && corepack install \
+ && python3 - <<'PY'
+import json, re
+floors = json.load(open("/readystack/npm-floors.json"))["overrides"]
+p = "pnpm-workspace.yaml"
+lines = open(p).read().split("\n")
+start = lines.index("overrides:")
+end = start + 1
+while end < len(lines) and (lines[end].startswith("    ") or not lines[end].strip()):
+    end += 1
+key = lambda ln: ln.strip().split(":", 1)[0].strip().strip("'\"")
+kept = [ln for ln in lines[start + 1:end] if ln.strip() and key(ln) not in floors]
+added = [f"    '{k}': '{v}'" for k, v in floors.items()]
+lines[start + 1:end] = kept + added + [""]
+# a fix younger than upstream's minimumReleaseAge (7 days at install time) is excluded by exact version, as upstream
+# excludes its own packages
+young = json.load(open("/readystack/npm-floors.json")).get("minimum_release_age_exclude") or []
+i = lines.index("minimumReleaseAgeExclude:") + 1
+while i < len(lines) and lines[i].startswith("    - "):
+    i += 1
+lines[i:i] = [f"    - {v}" for v in young]
+open(p, "w").write("\n".join(lines))
+print(f"pnpm overrides: {len(added)} ReadyStack floors over {len(kept)} upstream entries; {len(young)} release-age exclusion(s)")
+PY
+# The session-replay recording rasterizer (nodejs/src/session-replay/recording-rasterizer) renders recordings in a
+# headless browser with ffmpeg; the image contains neither and runs no rasterizer. It is not built or shipped, and nor
+# are its browser drivers puppeteer and puppeteer-capture (their chromium-bidi requires zod 3, and CVE-2023-54404 is
+# fixed only in zod 4.6.6). Nothing else imports it: no file of chain 630's dist/ outside that directory names it.
+RUN test -d nodejs/src/session-replay/recording-rasterizer && rm -rf nodejs/src/session-replay/recording-rasterizer \
+ && python3 - <<'PY'
+import json
+p = "nodejs/package.json"
+d = json.load(open(p))
+for k in ("puppeteer", "puppeteer-capture"):
+    assert d["dependencies"].pop(k, None), k
+assert d["scripts"].pop("start:recording-rasterizer", None)
+open(p, "w").write(json.dumps(d, indent=4) + "\n")
+PY
+ENV COREPACK_ENABLE_NETWORK=0
+RUN NODE_OPTIONS="--max-old-space-size=12288" CI=1 pnpm --filter=@posthog/nodejs... install --no-frozen-lockfile --store-dir /tmp/pnpm-store \
+ && NODE_OPTIONS="--max-old-space-size=12288" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --no-frozen-lockfile --store-dir /tmp/pnpm-store
+RUN for f in @posthog/plugin-transpiler @posthog/hogvm-node @posthog/replay-anonymizer @posthog/nodejs; do \
+      NODE_OPTIONS="--max-old-space-size=12288" bin/turbo --filter=$f build; done
+# production dependencies only; the server needs dist/, assets/, bin/ and package.json, not its sources or tests.
+# (Directory tests, not `ls | grep -q`: under pipefail grep -q's early exit gives ls SIGPIPE and fails the step at random;
+# chain 630 parked at assemble_kit on exactly that, 2026-10-22.)
+RUN CI=1 pnpm --filter=@posthog/nodejs deploy --prod --legacy --store-dir /tmp/pnpm-store /deploy/nodejs \
+ && cd /deploy/nodejs && find . -mindepth 1 -maxdepth 1 ! -name dist ! -name assets ! -name bin ! -name node_modules ! -name package.json -exec rm -rf {} + \
+ && python3 /readystack/npm_floors_check.py /readystack/npm-floors.json node_modules/.pnpm \
+ && test -d node_modules/.pnpm/@temporalio+core-bridge@1.22.0 && ! compgen -G 'node_modules/.pnpm/@temporalio+core-bridge@1.15*' >/dev/null \
+ && ! compgen -G 'node_modules/.pnpm/puppeteer*' >/dev/null && ! compgen -G 'node_modules/.pnpm/zod@3*' >/dev/null \
+ && ! test -e dist/session-replay/recording-rasterizer \
+ && ls dist/index.js && du -sh /deploy/nodejs
+# the plugin transpiler bundle externalises @babel/standalone only (upstream's recipe): materialise just that package
+RUN cd /code/common/plugin_transpiler && BABEL_REAL=$(node -e "process.stdout.write(require('path').dirname(require.resolve('@babel/standalone/package.json')))") \
+ && mkdir -p /deploy/plugin_transpiler/node_modules/@babel && cp -rL "$BABEL_REAL" /deploy/plugin_transpiler/node_modules/@babel/standalone \
+ && cp -r dist package.json /deploy/plugin_transpiler/
+
+# ---- Caddy (Apache-2.0), the allinone container's one HTTP entry point; product-kits/caddy's recipe ----
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS caddy
+WORKDIR /src
+COPY caddy-main.go main.go
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+# CVE floors are raise-only (a bare `go get m@vX` sets m and can drag caddy/v2 down), exact versions only
+# floor() fails closed (L-A133): `go list -mod=mod`, and only "not a known dependency" skips a module. The old
+# `go list -m ... 2>/dev/null || true` read "missing go.sum entry" (left by the first floor that raised x/net)
+# as "not a dependency" and silently skipped every later floor: chain 741 shipped go-jose v4.1.5 to the verdict
+# with `floor go-jose v4.1.6` in this file. held() re-checks every floor after `go mod tidy`.
+RUN floor() { e=$(mktemp); cur=$(go list -mod=mod -m -f '{{.Version}}' "$1" 2>"$e") || \
+        { grep -q 'not a known dependency' "$e" && return 0; cat "$e" >&2; return 1; }; [ -n "$cur" ] || return 0; \
+      [ "$(printf '%s\n%s\n' "$cur" "$2" | sort -V | tail -1)" = "$cur" ] || go mod edit -require="$1@$2"; } && \
+    held() { e=$(mktemp); cur=$(go list -m -f '{{.Version}}' "$1" 2>"$e") || \
+        { grep -q 'not a known dependency' "$e" && return 0; cat "$e" >&2; return 1; }; \
+      [ "$(printf '%s\n%s\n' "$cur" "$2" | sort -V | tail -1)" = "$cur" ] || \
+        { echo "floor $1 $2 did not take: the module resolved to $cur" >&2; return 1; }; } && \
+    go mod init readystack/posthog-caddy && go get github.com/caddyserver/caddy/v2@v2.11.7 && \
+    floor google.golang.org/grpc v1.83.2 && floor golang.org/x/crypto v0.57.0 && floor golang.org/x/net v0.62.0 && \
+    floor golang.org/x/sys v0.48.0 && floor golang.org/x/text v0.42.0 && floor github.com/go-jose/go-jose/v4 v4.1.6 && \
+    floor github.com/klauspost/compress v1.20.2 && go mod tidy && \
+    held google.golang.org/grpc v1.83.2 && held golang.org/x/crypto v0.57.0 && held golang.org/x/net v0.62.0 && held golang.org/x/sys v0.48.0 && held golang.org/x/text v0.42.0 && held github.com/go-jose/go-jose/v4 v4.1.6 && \
+    held github.com/klauspost/compress v1.20.2 \
+ && v=$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2) && [ "$v" = v2.11.7 ] \
+ && go build -trimpath -ldflags "-s -w" -o /out/caddy . && /out/caddy version
+
+# ---- CPython 3.14.10 compiled from python.org's source against Ubuntu 24.04's own libraries ----
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS cpython-src
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /vendored-python && curl -fsSL --retry 3 -o /vendored-python/Python-3.14.10.tar.xz https://www.python.org/ftp/python/3.14.10/Python-3.14.10.tar.xz && \
+    echo "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032  /vendored-python/Python-3.14.10.tar.xz" | sha256sum -c -
+# a FRESH pinned base, nothing installed first: the closure is then complete for the equally fresh offline stage
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS cpython-debs
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get -y --download-only --no-install-recommends install \
+      build-essential pkg-config xz-utils libssl-dev zlib1g-dev libbz2-dev libsqlite3-dev libffi-dev liblzma-dev libzstd-dev uuid-dev libexpat1-dev libncurses-dev libreadline-dev && \
+    mkdir -p /debs && cp /var/cache/apt/archives/*.deb /debs/ && echo "vendored $(ls -1 /debs/*.deb | wc -l) CPython build debs"
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS cpython
+ARG SOURCE_DATE_EPOCH=1794384272
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+COPY --from=cpython-debs /debs /tmp/cpython-debs
+COPY --from=cpython-src /vendored-python/Python-3.14.10.tar.xz /tmp/Python-3.14.10.tar.xz
+RUN set --; for f in /tmp/cpython-debs/*.deb; do [ -e "$f" ] && set -- "$@" "$f"; done; \
+    for pass in 1 2 3 4 5; do [ $# -eq 0 ] || dpkg -i --skip-same-version "$@" >/dev/null 2>&1 && break; done; \
+    dpkg --configure -a && bad= && for d in "$@"; do p=$(dpkg-deb -f "$d" Package) v=$(dpkg-deb -f "$d" Version); \
+      case "$(dpkg-query -W -f='${Version} ${db:Status-Abbrev}' "$p" 2>/dev/null)" in "$v ii"*) ;; *) bad="$bad $p=$v" ;; esac; done && \
+    { [ -z "$bad" ] || { echo "vendored debs not installed at their vendored version:$bad" >&2; false; }; } && \
+    : "${SOURCE_DATE_EPOCH:?the CPython build needs SOURCE_DATE_EPOCH}" && \
+    echo "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032  /tmp/Python-3.14.10.tar.xz" | sha256sum -c - && \
+    mkdir -p /usr/src/python && tar -xJf /tmp/Python-3.14.10.tar.xz -C /usr/src/python --strip-components=1 --no-same-owner && \
+    rm -rf /tmp/cpython-debs /tmp/Python-3.14.10.tar.xz && cd /usr/src/python && \
+    export DEB_BUILD_MAINT_OPTIONS=optimize=-lto && \
+    PYCF="$(dpkg-buildflags --get CFLAGS) $(dpkg-buildflags --get CPPFLAGS)" && PYLD="$(dpkg-buildflags --get LDFLAGS)" && \
+    ./configure --build=x86_64-linux-gnu --prefix=/usr/local --enable-shared --enable-loadable-sqlite-extensions --enable-option-checking=fatal --disable-test-modules --without-static-libpython --with-ensurepip=install --with-system-expat --without-system-libmpdec --with-dbmliborder= py_cv_module__dbm=n/a py_cv_module__gdbm=n/a py_cv_module__tkinter=n/a && \
+    make -j"$(nproc)" "EXTRA_CFLAGS=$PYCF" "LDFLAGS=$PYLD,--strip-all" && \
+    rm python && make -j"$(nproc)" "EXTRA_CFLAGS=$PYCF" "LDFLAGS=$PYLD,--strip-all,-rpath='\$\$ORIGIN/../lib'" python && \
+    make install COMPILEALL_OPTS=--invalidation-mode=checked-hash && \
+    cd / && rm -rf /usr/src/python /usr/local/lib/python3.14/idlelib /usr/local/lib/python3.14/tkinter /usr/local/lib/python3.14/turtledemo /usr/local/bin/idle3* && \
+    for s in pip3 pydoc3 python3 python3-config; do ln -sfT "$s" "/usr/local/bin/${s%3*}${s#*3}"; done && \
+    ldconfig && /usr/local/bin/python3 -I -B -c "import ssl, sqlite3, zlib, bz2, lzma, ctypes, uuid, pyexpat, decimal, readline, curses, hashlib, compression.zstd, sys, importlib.util as u; bad = [m for m in ('_dbm', '_gdbm', '_tkinter') if u.find_spec(m)]; assert not bad, ('built but must not be', bad); print(sys.version.replace(chr(10), ' '), '|', ssl.OPENSSL_VERSION, '| sqlite', sqlite3.sqlite_version, '| expat', pyexpat.EXPAT_VERSION)" && \
+    ldd /usr/local/lib/python3.14/lib-dynload/_ssl.cpython-*.so | grep -qE 'libssl.so.3 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/_sqlite3.cpython-*.so | grep -qE 'libsqlite3.so.0 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/pyexpat.cpython-*.so | grep -qE 'libexpat.so.1 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/_ctypes.cpython-*.so | grep -qE 'libffi.so.8 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/_lzma.cpython-*.so | grep -qE 'liblzma.so.5 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/_bz2.cpython-*.so | grep -qE 'libbz2.so.1.0 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/_uuid.cpython-*.so | grep -qE 'libuuid.so.1 => /(usr/)?lib/x86_64-linux-gnu/' && ldd /usr/local/lib/python3.14/lib-dynload/zlib.cpython-*.so | grep -qE 'libz.so.1 => /(usr/)?lib/x86_64-linux-gnu/'
+
+# Every Python stage below starts here: one interpreter for the builders and the runtime, so compiled wheels match.
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS python-base
+ENV LANG=C.UTF-8
+COPY --from=cpython /usr/local/ /usr/local/
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates netbase tzdata \
+      libssl3t64 zlib1g libbz2-1.0 libsqlite3-0 libffi8 liblzma5 libzstd1 libuuid1 libexpat1 libncursesw6 libtinfo6 libreadline8t64 && \
+    rm -rf /var/lib/apt/lists/* && ldconfig && userdel --remove ubuntu && python3 --version
+
+# ---- python dependencies: upstream's uv.lock, minus PostHog Cloud's deployment tooling, plus CVE floors ----
+FROM python-base AS python-deps
+ARG PH_EXCLUDE_NEWER
+ARG PH_EXCLUDE_NEWER_PACKAGES
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config git curl ca-certificates \
+      libpq-dev libxmlsec1-dev libxml2-dev libxslt1-dev libffi-dev zlib1g-dev && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /uvx /bin/
+WORKDIR /code
+COPY --from=src /src/pyproject.toml /src/uv.lock /code/
+COPY --from=src /src/tools/hogli /code/tools/hogli
+COPY --from=src /src/packages/owners-yaml /code/packages/owners-yaml
+COPY --from=src /src/packages/personhog-proto /code/packages/personhog-proto
+COPY py-floors.txt resolve_floors.py cpu_baseline.py /readystack/
+ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0 UV_NO_CACHE=1 UV_PYTHON=/python-runtime/bin/python
+# upstream pins every package (uv export of uv.lock, production group). Excluded: dagster-cloud and pex, PostHog
+# Cloud's Dagster Cloud deployment tooling (nothing in the tree imports either; pex vendors pip 20.3.4 and
+# setuptools 44). py-floors.txt raises the packages with fixable critical/high CVEs; resolve_floors.py relaxes only the
+# upstream pins that conflict with a floor (never a downgrade), resolved as of the commit's date (a package named in
+# PH_EXCLUDE_NEWER_PACKAGES: as of its own cutoff).
+# x86-64-v2, not v3 (cpu_baseline.py): polars requires polars-runtime-32, built for x86-64-v3 (AVX2, BMI2, FMA, ...),
+# which kills `import polars` with SIGILL on a CPU without AVX2 (PostHog's URL conf loads it; chain 804 on <redacted: internal host>,
+# 2026-10-31). polars-runtime-compat at polars' own version is the same release built for x86-64-v2, and polars loads
+# it first whenever it is installed. chdb-core (chDB, embedded ClickHouse) has no such build and stays x86-64-v3: PostHog
+# runs it only in a subprocess for data-warehouse table DESCRIBE and row counts and asks the ClickHouse server instead
+# when that fails (products/warehouse_sources/backend/models/table.py).
+RUN uv export --frozen --no-dev --no-editable --no-hashes --no-emit-project --no-header -o /readystack/requirements.upstream.txt \
+ && grep -viE '^(dagster-cloud|pex)==' /readystack/requirements.upstream.txt > /readystack/requirements.ce.txt \
+ && uv venv /python-runtime --python /usr/local/bin/python3.14 \
+ && RF_EXCLUDE_NEWER="$PH_EXCLUDE_NEWER" RF_EXCLUDE_NEWER_PACKAGES="$PH_EXCLUDE_NEWER_PACKAGES" python3 /readystack/resolve_floors.py /readystack/requirements.ce.txt /readystack/py-floors.txt /readystack/requirements.txt \
+ && uv pip install --exclude-newer "$PH_EXCLUDE_NEWER" $(for p in $PH_EXCLUDE_NEWER_PACKAGES; do printf -- '--exclude-newer-package %s ' "$p"; done) --resolution lowest-direct --no-binary lxml --no-binary xmlsec -r /readystack/requirements.txt \
+ && pv=$(/python-runtime/bin/python -c "import importlib.util as u, importlib.metadata as m; print(m.version('polars') if u.find_spec('polars') else '')") \
+ && { [ -z "$pv" ] || uv pip install --exclude-newer "$PH_EXCLUDE_NEWER" --no-deps "polars-runtime-compat==$pv"; } \
+ && uv pip check && uv pip freeze > /readystack/requirements.lock \
+ && ! grep -qiE '^(dagster-cloud|pex)==' /readystack/requirements.lock \
+ && /python-runtime/bin/python /readystack/cpu_baseline.py \
+ && /python-runtime/bin/python -c "import django, lxml, xmlsec; print('django', django.get_version())"
+# playwright's bundled driver brings its own node binary; PostHog drives a remote browser over CDP with it. The driver
+# runs on the image's node (same major line), so the bundled copy is replaced by a link to it.
+RUN d=$(/python-runtime/bin/python -c "import playwright, os; print(os.path.join(os.path.dirname(playwright.__file__), 'driver'))") \
+ && test -x "$d/node" && rm -f "$d/node" && ln -s /usr/local/bin/node "$d/node"
+
+# ---- the runtime filesystem, assembled online, exported as tars ----
+FROM python-base AS runtime
+ARG PH_COMMIT
+ARG PH_VERSION
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get -y --no-install-recommends dist-upgrade && apt-get install -y --no-install-recommends \
+      libpq5 libxmlsec1t64 libxmlsec1t64-openssl libxml2 libxslt1.1 libjemalloc2 libgomp1 media-types procps libsasl2-2 curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 10001 posthog && useradd -u 10001 -g posthog -m -d /home/posthog -s /usr/sbin/nologin posthog
+# CVE floors on OS packages mirror strategies/posthog.json apt_refresh (hand kits do not read it): the dist-upgrade above
+# must have installed at least the fixed version, else the vendor run fails here instead of exporting the base's older
+# package into system.tar.gz (master-20261022-b904ac8-CE-ubuntu24.04-r3 shipped apt 2.8.3, CVE-2026-109518).
+RUN for m in apt=2.8.4ubuntu0.1 libapt-pkg6.0t64=2.8.4ubuntu0.1 libpcre2-8-0=10.42-4ubuntu2.2; do p=${m%%=*} v=${m#*=}; \
+      dpkg --compare-versions "$(dpkg-query -W -f='${Version}' "$p" 2>/dev/null)" ge "$v" || \
+        { echo "$p is below $v, the CVE minimum of strategies/posthog.json apt_refresh" >&2; exit 1; }; \
+      echo "apt floor $p $v: $(dpkg-query -W -f='${Version}' "$p")"; done
+COPY --from=node-dist /opt/node/bin/node /usr/local/bin/node
+COPY --from=python-deps /python-runtime /python-runtime
+COPY --from=python-deps /readystack /code/readystack/python
+ENV PATH=/python-runtime/bin:$PATH PYTHONPATH=/python-runtime PYTHONUNBUFFERED=1 PYTHONUTF8=1 LANG=C.UTF-8
+WORKDIR /code
+COPY --from=src /src/LICENSE /code/LICENSE
+COPY --from=src /src/manage.py /code/manage.py
+COPY --from=src /src/posthog /code/posthog
+COPY --from=src /src/ee /code/ee
+COPY --from=src /src/products /code/products
+COPY --from=src /src/common/hogvm /code/common/hogvm
+COPY --from=src /src/common/migration_utils /code/common/migration_utils
+COPY --from=src /src/common/esbuilder /code/common/esbuilder
+COPY --from=src /src/bin /code/bin
+COPY --from=src /src/rust/persons_migrations /code/rust/persons_migrations
+COPY --from=src /src/packages/owners-yaml /code/packages/owners-yaml
+COPY --from=src /src/services/mcp/schema /code/services/mcp/schema
+COPY --from=src /src/docker/kafka/topics.txt /code/docker/kafka/topics.txt
+# ClickHouse files PostHog's schema expects on the ClickHouse server (config, users, UDF definitions, format schemas):
+# shipped for the operator to mount into their ClickHouse (posthog-ce clickhouse-config <dir>). The prebuilt UDF
+# executables in upstream's posthog/user_scripts are not shipped (Go and Rust binaries built outside this kit).
+COPY --from=src /src/docker/clickhouse/config.d/default.xml /code/share/clickhouse/config.d/posthog.xml
+COPY --from=src /src/docker/clickhouse/users.xml /code/share/clickhouse/users.d/posthog.xml
+COPY clickhouse-keeper.xml /code/share/clickhouse/config.d/posthog-keeper.xml
+COPY clickhouse-init.sh /code/share/clickhouse/docker-entrypoint-initdb.d/posthog.sh
+COPY --from=src /src/docker/clickhouse /code/share/clickhouse/upstream
+COPY --from=src /src/docker/clickhouse/user_defined_function.xml /code/share/clickhouse/user_defined_function.xml
+COPY clickhouse-start.sh /code/share/clickhouse/start-clickhouse.sh
+COPY --from=rust /out/udf/ /code/share/clickhouse/user_scripts/
+COPY --from=udf-go /out/udf/ /code/share/clickhouse/user_scripts/
+COPY --from=src /src/posthog/user_scripts/run_udf.sh /code/share/clickhouse/user_scripts/run_udf.sh
+RUN cd /code/share/clickhouse/user_scripts && for u in aggregate_funnel decompress_udf json_drop_keys_udf json_clean_posthog_event_properties_udf json_strip_empty_strings_and_nulls_udf; do \
+      printf '#!/bin/bash\n. "$(dirname "$0")/run_udf.sh"\n' > "$u" && chmod 755 "$u" "${u}_x86_64"; done && chmod 755 run_udf.sh /code/share/clickhouse/start-clickhouse.sh
+RUN rm -rf /code/posthog/user_scripts
+COPY --from=frontend /code/frontend/dist /code/frontend/dist
+COPY --from=frontend /code/frontend/src/products.json /code/frontend/src/products.json
+COPY --from=nodejs /deploy/nodejs /code/nodejs
+COPY --from=nodejs /deploy/plugin_transpiler /code/common/plugin_transpiler
+# The Kafka broker settings PostHog's Node services read, one per producer and consumer (posthog-ce points every unset
+# one at KAFKA_HOSTS): the literal KAFKA_*_METADATA_BROKER_LIST names, KAFKA_<mode>_ for each mode the services pass to
+# getKafkaConfigFromEnv / KafkaProducerWrapper.create, and three named here: PRODUCER (create()'s default mode),
+# CONSUMER, and INGESTION_PRODUCER (the Rust capture service's). Tests are left out.
+RUN cd /code/nodejs/dist && x=(--include=*.js --exclude=*.test.js --exclude-dir=__tests__) \
+ && { printf 'KAFKA_%s_METADATA_BROKER_LIST\n' PRODUCER CONSUMER INGESTION_PRODUCER; \
+      grep -rhoE 'KAFKA_[A-Z0-9_]+_METADATA_BROKER_LIST' "${x[@]}" . ; \
+      grep -rhoE "(getKafkaConfigFromEnv\)?|KafkaProducerWrapper\.create)\([^()]*'[A-Z][A-Z0-9_]*'" "${x[@]}" . \
+        | sed -E "s/.*'([A-Z][A-Z0-9_]*)'\$/KAFKA_\1_METADATA_BROKER_LIST/"; } | LC_ALL=C sort -u > /code/share/posthog-kafka-broker-vars \
+ && grep -qx KAFKA_CDP_PRODUCER_METADATA_BROKER_LIST /code/share/posthog-kafka-broker-vars \
+ && test "$(wc -l < /code/share/posthog-kafka-broker-vars)" -ge 12
+COPY --from=rust /out/bin/ /usr/local/bin/
+COPY --from=caddy /out/caddy /usr/local/bin/caddy
+COPY Caddyfile /code/readystack/Caddyfile
+COPY posthog-ce /usr/local/bin/posthog-ce
+COPY readystack_setup.py empty_mmdb.py /code/readystack/
+ARG SOURCE_DATE_EPOCH=1794384272
+RUN chmod 0755 /usr/local/bin/posthog-ce \
+ && mkdir -p /code/share && python /code/readystack/empty_mmdb.py /code/share/GeoLite2-City.mmdb "$SOURCE_DATE_EPOCH" \
+ && SKIP_SERVICE_VERSION_REQUIREMENTS=1 STATIC_COLLECTION=1 DATABASE_URL='postgres:///' REDIS_URL='redis:///' python manage.py collectstatic --noinput -v0 \
+ && SKIP_SERVICE_VERSION_REQUIREMENTS=1 STATIC_COLLECTION=1 DATABASE_URL='postgres:///' REDIS_URL='redis:///' python manage.py render_wizard_tool_catalog \
+ && SKIP_SERVICE_VERSION_REQUIREMENTS=1 STATIC_COLLECTION=1 DATABASE_URL='postgres:///' REDIS_URL='redis:///' python manage.py check \
+ && test -f /code/products/wizard/tool-catalog.json \
+ && find /code/staticfiles /code/frontend/dist \( -name '*.map' -o -name '*.map.gz' -o -name '*.map.br' \) -delete \
+ && printf '%s\n' "PostHog ${PH_VERSION} (upstream commit ${PH_COMMIT}), ReadyStack CE build" > /code/READYSTACK_VERSION \
+ && python -m compileall -q -j 0 --invalidation-mode checked-hash -x '/tests?/' manage.py posthog ee common/hogvm common/migration_utils products packages/owners-yaml
+# third-party packages: a few ship files that are not valid on this Python (vendored py2 test data); compileall reports
+# them and the rest compile
+RUN python -m compileall -q -j 0 --invalidation-mode checked-hash /python-runtime/lib/python3.14/site-packages >/dev/null 2>&1 || true
+RUN chown -R posthog:posthog /code /home/posthog
+
+FROM runtime AS export-src
+USER root
+RUN mkdir -p /export \
+ && tar czf /export/app.tar.gz -C / code \
+ && tar czf /export/venv.tar.gz -C / python-runtime \
+ && tar czf /export/bin.tar.gz -C / usr/local/bin/node usr/local/bin/capture usr/local/bin/personhog-replica usr/local/bin/personhog-router usr/local/bin/feature-flags usr/local/bin/property-defs-rs usr/local/bin/caddy usr/local/bin/posthog-ce \
+ && tar czf /export/system.tar.gz --exclude='./usr/local/bin/python3*' --exclude='./usr/local/bin/python' --exclude='./usr/local/bin/python-config' --exclude='./usr/local/bin/pip*' --exclude='./usr/local/bin/pydoc*' --exclude='./usr/local/bin/idle3*' --exclude='./usr/local/lib/libpython3*' --exclude='./usr/local/lib/python3.14' --exclude='./usr/local/lib/pkgconfig/python*' --exclude='./usr/local/include/python3.14' --exclude='./usr/local/share/man/man1/python3*' --exclude=usr/local --exclude=var/cache --exclude=var/log --exclude=var/lib/apt/lists \
+        -C / usr etc var home \
+ && ls -la /export && du -sh /export
+FROM scratch AS export
+COPY --from=export-src /export/ /posthog-src/
+COPY --from=cpython-src /vendored-python/ /posthog-src/python/
+COPY --from=cpython-debs /debs/ /posthog-src/python/debs/

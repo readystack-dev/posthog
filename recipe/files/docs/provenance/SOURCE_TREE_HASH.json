@@ -1,0 +1,9 @@
+{
+  "schema": "kitforge.source_tree_hash.v1",
+  "slug": "posthog",
+  "repo": "https://github.com/PostHog/posthog",
+  "ref": "b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+  "commit": "b904ac8008e531c8aaeaf58e523cf97cff9fba41",
+  "tree_listing_sha256": "f891353fb4511d2e73ff287c2eaf25af3d55335185787f784cf4ce68a361004b",
+  "file_count": 59938
+}

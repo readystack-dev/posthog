@@ -1,0 +1,38 @@
+# ReadyStack PostHog (CE): the one HTTP entry point of an `allinone` container (and of the `proxy` role).
+# The routes are upstream's hobby-deploy Caddyfile's (docker-compose.base.yml, MIT) for the services this image runs:
+# event capture -> capture, feature flags -> feature-flags, everything else -> the Django web app.
+{
+	admin off
+	auto_https off
+	persist_config off
+	# Behind a TLS proxy (IS_BEHIND_PROXY=true) PostHog reads the scheme from X-Forwarded-Proto. Caddy keeps the
+	# X-Forwarded-* headers a trusted proxy sent and replaces them otherwise: without this, every request reached PostHog
+	# as http and was redirected to https without end. Private and loopback addresses are trusted unless TRUSTED_PROXIES
+	# names others (space-separated addresses or CIDR ranges, e.g. a proxy on a public address).
+	servers {
+		trusted_proxies static {$TRUSTED_PROXIES:private_ranges}
+	}
+}
+
+:{$PROXY_PORT:8000} {
+	@capture {
+		path /e /e/ /e/*
+		path /i/v0 /i/v0/ /i/v0/*
+		path /i/v1/analytics/events /i/v1/analytics/events/
+		path /batch /batch/ /batch/*
+		path /capture /capture/ /capture/*
+	}
+	@flags {
+		path /flags /flags/ /flags/*
+		path /api/feature_flag/local_evaluation /api/feature_flag/local_evaluation/ /api/feature_flag/local_evaluation/*
+	}
+	handle @capture {
+		reverse_proxy {$CAPTURE_UPSTREAM:127.0.0.1:3000}
+	}
+	handle @flags {
+		reverse_proxy {$FLAGS_UPSTREAM:127.0.0.1:3001}
+	}
+	handle {
+		reverse_proxy {$WEB_UPSTREAM:127.0.0.1:8010}
+	}
+}

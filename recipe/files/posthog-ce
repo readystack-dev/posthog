@@ -1,0 +1,142 @@
+#!/bin/bash
+# ReadyStack PostHog (CE) entrypoint -- one image, one role per container, all as the non-root user posthog.
+# Usage: posthog-ce <role>      roles: allinone | migrate | web | worker | ingestion | plugins | capture |
+#                                       personhog-replica | personhog-router | feature-flags | property-defs | proxy |
+#                                       clickhouse-config <dir> | version
+# The services PostHog needs (PostgreSQL, Redis, ClickHouse with ZooKeeper, Kafka) run as their own containers;
+# this image carries only PostHog's own code. Every setting is an environment variable (see the Admin Handbook).
+set -euo pipefail
+cd /code
+role="${1:-allinone}"; shift || true
+
+: "${DEPLOYMENT:=hobby}"; export DEPLOYMENT
+: "${OTEL_SDK_DISABLED:=true}"; export OTEL_SDK_DISABLED
+# One PostgreSQL for the app and the persons tables, unless split; ClickHouse in plain TCP unless set otherwise.
+if [ -n "${DATABASE_URL:-}" ]; then
+    : "${PERSONS_DB_WRITER_URL:=$DATABASE_URL}" "${PERSONS_DB_READER_URL:=$PERSONS_DB_WRITER_URL}"
+    export PERSONS_DB_WRITER_URL PERSONS_DB_READER_URL
+fi
+: "${CLICKHOUSE_HOST:=clickhouse}" "${CLICKHOUSE_DATABASE:=posthog}" "${CLICKHOUSE_SECURE:=false}" "${CLICKHOUSE_VERIFY:=false}"
+: "${CLICKHOUSE_LOGS_CLUSTER_HOST:=$CLICKHOUSE_HOST}" "${CLICKHOUSE_LOGS_CLUSTER_SECURE:=$CLICKHOUSE_SECURE}"
+export CLICKHOUSE_HOST CLICKHOUSE_DATABASE CLICKHOUSE_SECURE CLICKHOUSE_VERIFY CLICKHOUSE_LOGS_CLUSTER_HOST CLICKHOUSE_LOGS_CLUSTER_SECURE
+: "${KAFKA_HOSTS:=kafka:9092}"; export KAFKA_HOSTS
+# PostHog's Node services read their brokers from one KAFKA_<NAME>_METADATA_BROKER_LIST per producer and consumer, each
+# defaulting to kafka:9092, not from KAFKA_HOSTS: with the Kafka container under another name, ingestion stopped at
+# start ("Broker transport failure"; upstream's compose files rely on the name too). Every one left unset follows
+# KAFKA_HOSTS. The names were read from the built services when the image was built.
+if [ -r /code/share/posthog-kafka-broker-vars ]; then
+    while read -r _v; do
+        if [ -n "$_v" ] && [ -z "${!_v:-}" ]; then export "$_v=$KAFKA_HOSTS"; fi
+    done < /code/share/posthog-kafka-broker-vars
+fi
+: "${PERSONHOG_ADDR:=127.0.0.1:50052}"; export PERSONHOG_ADDR
+: "${PERSONHOG_ENABLED:=true}"; export PERSONHOG_ENABLED
+# The services read Redis as host + port per purpose; default every one of them to REDIS_URL's host and port.
+if [ -n "${REDIS_URL:-}" ]; then
+    _r=${REDIS_URL#*://}; _r=${_r#*@}; _r=${_r%%/*}; _rh=${_r%%:*}; _rp=${_r##*:}; [ "$_rp" = "$_r" ] && _rp=6379
+    for _v in COOKIELESS CDP LOGS TRACES METRICS SESSION_RECORDING_API; do
+        eval ": \"\${${_v}_REDIS_HOST:=$_rh}\" \"\${${_v}_REDIS_PORT:=$_rp}\"; export ${_v}_REDIS_HOST ${_v}_REDIS_PORT"
+    done
+    # the CDP's Valkey (hog function state) is the same Redis-protocol server unless set apart
+    : "${CDP_VALKEY_HOST:=$_rh}" "${CDP_VALKEY_PORT:=$_rp}"; export CDP_VALKEY_HOST CDP_VALKEY_PORT
+fi
+# GeoIP: the image's database is empty (no networks); mount a GeoLite2-City or DB-IP City Lite .mmdb here to enable it.
+: "${GEOIP_DB_PATH:=/code/share/GeoLite2-City.mmdb}"
+export MMDB_FILE_LOCATION="${MMDB_FILE_LOCATION:-$GEOIP_DB_PATH}" MAXMIND_DB_PATH="${MAXMIND_DB_PATH:-$GEOIP_DB_PATH}"
+export PROMETHEUS_MULTIPROC_DIR="${PROMETHEUS_MULTIPROC_DIR:-/tmp/posthog-prometheus}"
+mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+
+web() {
+    export GRANIAN_INTERFACE=asgi GRANIAN_HOST="${GRANIAN_HOST:-0.0.0.0}" GRANIAN_PORT="${GRANIAN_PORT:-8000}" \
+        GRANIAN_WORKERS="${GRANIAN_WORKERS:-2}" GRANIAN_LOG_LEVEL="${GRANIAN_LOG_LEVEL:-warning}" \
+        GRANIAN_LOG_ACCESS_ENABLED="${GRANIAN_LOG_ACCESS_ENABLED:-false}" GRANIAN_RESPAWN_FAILED_WORKERS=true \
+        GRANIAN_LOOP=uvloop
+    exec granian posthog.asgi:application
+}
+worker() { exec ./bin/docker-worker-celery --with-scheduler; }
+node_server() {
+    export DATABASE_URL PERSONS_DATABASE_URL="${PERSONS_DATABASE_URL:-$DATABASE_URL}" \
+        BEHAVIORAL_COHORTS_DATABASE_URL="${BEHAVIORAL_COHORTS_DATABASE_URL:-$DATABASE_URL}" NODE_ENV=production
+    exec node --enable-source-maps=false nodejs/dist/index.js
+}
+migrate() {
+    python /code/readystack/readystack_setup.py kafka-topics
+    # ClickHouse's first start creates its replicated tables through the keeper: a CREATE ... ON CLUSTER can outlast the
+    # client's 60 s read timeout while it settles (measured: ReadTimeout on the migration history table, a container
+    # started with ClickHouse). migrate_clickhouse runs at every start and skips what it applied, so it is tried again.
+    local n=1
+    until python manage.py migrate_clickhouse; do
+        [ "$n" -ge 3 ] && return 1
+        echo "posthog-ce: migrate_clickhouse failed (try $n of 3); trying again in 30 s" >&2
+        n=$((n + 1)); sleep 30
+    done
+    python manage.py migrate --noinput
+    python manage.py apply_persons_migrations --hobby
+    python /code/readystack/readystack_setup.py persons-index
+    python manage.py run_async_migrations --complete-noop-migrations
+    python manage.py run_async_migrations --check
+}
+
+case "$role" in
+    web) web ;;
+    worker) worker ;;
+    migrate) migrate ;;
+    ingestion) export PLUGIN_SERVER_MODE=ingestion-v2-combined HTTP_SERVER_PORT="${INGESTION_HTTP_PORT:-6739}"; node_server ;;
+    plugins) unset PLUGIN_SERVER_MODE; node_server ;;
+    capture)
+        export ADDRESS="${CAPTURE_ADDRESS:-0.0.0.0:3000}" CAPTURE_MODE="${CAPTURE_MODE:-events}" \
+            KAFKA_TOPIC="${KAFKA_TOPIC:-events_plugin_ingestion}" \
+            CAPTURE_OUTPUT_ANALYTICS_MAIN_TOPIC="${CAPTURE_OUTPUT_ANALYTICS_MAIN_TOPIC:-events_plugin_ingestion}" \
+            KAFKA_INGESTION_PRODUCER_METADATA_BROKER_LIST="${KAFKA_INGESTION_PRODUCER_METADATA_BROKER_LIST:-$KAFKA_HOSTS}"
+        exec /usr/local/bin/capture ;;
+    personhog-replica)
+        export GRPC_ADDRESS="${PERSONHOG_REPLICA_ADDRESS:-0.0.0.0:50051}" PRIMARY_DATABASE_URL="${PRIMARY_DATABASE_URL:-$DATABASE_URL}" \
+            METRICS_PORT="${PERSONHOG_REPLICA_METRICS_PORT:-9100}"
+        exec /usr/local/bin/personhog-replica ;;
+    personhog-router)
+        export GRPC_ADDRESS="${PERSONHOG_ROUTER_ADDRESS:-0.0.0.0:50052}" REPLICA_URL="${PERSONHOG_REPLICA_URL:-http://127.0.0.1:50051}" \
+            METRICS_PORT="${PERSONHOG_ROUTER_METRICS_PORT:-9101}" BACKEND_TIMEOUT_MS="${BACKEND_TIMEOUT_MS:-5000}"
+        exec /usr/local/bin/personhog-router ;;
+    feature-flags)
+        export ADDRESS="${FLAGS_ADDRESS:-0.0.0.0:3001}" WRITE_DATABASE_URL="${WRITE_DATABASE_URL:-$DATABASE_URL}" \
+            READ_DATABASE_URL="${READ_DATABASE_URL:-$DATABASE_URL}" PERSONS_WRITE_DATABASE_URL="${PERSONS_WRITE_DATABASE_URL:-$DATABASE_URL}" \
+            PERSONS_READ_DATABASE_URL="${PERSONS_READ_DATABASE_URL:-$DATABASE_URL}"
+        exec /usr/local/bin/feature-flags ;;
+    property-defs) exec /usr/local/bin/property-defs-rs ;;
+    proxy)
+        export XDG_CONFIG_HOME=/tmp/caddy XDG_DATA_HOME=/tmp/caddy
+        exec /usr/local/bin/caddy run --config /code/readystack/Caddyfile --adapter caddyfile ;;
+    allinone)
+        # Every PostHog process in this one container, for a single host: migrations first, then the services.
+        # A core process that exits stops the container (non-zero: let the runtime restart it); see below.
+        [ "${SKIP_MIGRATIONS:-false}" = true ] || migrate
+        # the web app listens on loopback; Caddy (proxy) is the container's one HTTP port and routes capture and flags
+        export GRANIAN_HOST=127.0.0.1 GRANIAN_PORT=8010 WEB_UPSTREAM=127.0.0.1:8010
+        # the web app reaches the Node CDP API (hog function templates, destinations) of the plugins process here
+        export CDP_API_URL="${CDP_API_URL:-http://127.0.0.1:6738}"
+        # two Celery worker processes unless set: each forked worker holds the Django app (about 1 GB RSS)
+        export WEB_CONCURRENCY="${WEB_CONCURRENCY:-2}"
+        # Core processes: if one exits, the others are stopped and the container exits non-zero (restart the set).
+        pids=()
+        for r in personhog-replica personhog-router capture ingestion feature-flags worker web proxy; do
+            "$0" "$r" & pids+=("$!")
+            [ "$r" = personhog-router ] && sleep 2
+        done
+        # Auxiliary processes (the Node CDP server behind destinations and workflows, property-definitions ingestion):
+        # restarted after an exit, never taking the core down with them.
+        for r in plugins property-defs; do
+            ( while :; do "$0" "$r"; echo "posthog-ce: $r exited (rc=$?); restarting in 30 s" >&2; sleep 30; done ) &
+        done
+        trap 'kill "${pids[@]}" 2>/dev/null; exit 143' TERM INT
+        wait -n "${pids[@]}"; rc=$?
+        echo "posthog-ce: a core process exited (rc=$rc); stopping the others" >&2
+        kill "${pids[@]}" 2>/dev/null || true
+        exit "$(( rc == 0 ? 1 : rc ))" ;;
+    version) cat /code/READYSTACK_VERSION; exit 0 ;;
+    clickhouse-config)
+        # PostHog's ClickHouse server files (config.d, users, UDF definitions, format schemas) for the operator's ClickHouse
+        out="${1:?usage: posthog-ce clickhouse-config <directory>}"
+        mkdir -p "$out" && cd /code/share/clickhouse && cp -r config.d users.d docker-entrypoint-initdb.d user_scripts \
+            user_defined_function.xml start-clickhouse.sh "$out"/ && echo "ClickHouse files written to $out" ;;
+    *) exec "$role" "$@" ;;
+esac
