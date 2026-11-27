@@ -1,3 +1,9 @@
+[![ReadyStack](https://readystack.dev/logo.svg)](https://readystack.dev)
+
+**Stable, Open-source Releases, Automated** · [readystack.dev](https://readystack.dev)
+
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-readystack%2Fposthog-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/readystack/posthog) [![Docker pulls](https://img.shields.io/docker/pulls/readystack/posthog)](https://hub.docker.com/r/readystack/posthog) [![Grade at release](https://img.shields.io/badge/grade%20at%20release-B%20%2883%25%29-2ea44f)](https://readystack.dev/products/posthog) [![Signed: cosign](https://img.shields.io/badge/signed-cosign-2ea44f)](https://readystack.dev/keys/cosign.pub) ![SBOM: SPDX](https://img.shields.io/badge/SBOM-SPDX-2ea44f) ![Provenance: SLSA v1](https://img.shields.io/badge/provenance-SLSA%20v1-2ea44f) ![Offline rebuild: verified](https://img.shields.io/badge/offline%20rebuild-verified-2ea44f)
+
 # PostHog: ReadyStack build kit
 
 The offline build kit for the Docker image `readystack/posthog:master-20261022-b904ac8-CE-ubuntu24.04-r5`. It holds what the image is built from (upstream source, base images, toolchain, pinned dependencies) and the documents, so the image can be rebuilt with no network access (`docker build --network=none`).
@@ -70,6 +76,12 @@ The build trail (`ReadyStack-posthog-master-20261022-b904ac8-CE-ubuntu24.04-r5.t
 
 ## This repository
 
-`recipe/` holds the kit's recipe files (Dockerfiles, build scripts, pins) as published at https://readystack.dev/products/posthog/recipe. The complete kit is the release download. Each release is a tag here.
+`recipe/` holds the kit's recipe files (Dockerfiles, build scripts, pins) as published at https://readystack.dev/products/posthog/recipe. The complete kit is the release download. Each release is a tag here. How to report a vulnerability: [SECURITY.md](SECURITY.md).
+
+## About ReadyStack
+
+**Stable, Open-source Releases, Automated.** ReadyStack releases popular open-source apps every week with every available critical and high security fix applied, plus full documentation, reference data, tests and a build recipe that recreates each release bit-for-bit. Each release is rebuilt from its pinned inputs with the network off, checked against its published digest, signed, and scanned and graded again every day. The images and build kits are free, and ReadyStack is soon to be a nonprofit.
+
+[readystack.dev](https://readystack.dev) · [All products](https://readystack.dev/products.html) · [Build kits on GitHub](https://github.com/readystack-dev) · [Defect log](https://readystack.dev/defects.html) · contact@readystack.dev
 
 — ReadyStack · https://readystack.dev
